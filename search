@@ -1,0 +1,77 @@
+#!/usr/bin/env ruby
+$LOAD_PATH.unshift File.expand_path('../lib', __FILE__)
+require 'research_finder'
+require 'sinatra'
+
+# パソコンの画面だけでなく、同じWi-FiにいるiPadからもアクセスできるようにする設定
+set :bind, '0.0.0.0'
+set :port, ENV['PORT'] || 4567
+
+# 最初にページを開いた時の画面（HTML）
+get '/' do
+  <<-HTML
+    <!DOCTYPE html>
+    <html lang="ja">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>自由研究資料・統計検索ツール</title>
+      <style>
+        body { font-family: sans-serif; max-width: 600px; margin: 40px auto; padding: 20px; background: #f5f7fa; color: #333; }
+        h1 { text-align: center; color: #2c3e50; font-size: 24px; }
+        p { text-align: center; color: #7f8c8d; }
+        form { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); margin-bottom: 20px; }
+        input[type="text"] { width: 100%; padding: 12px; font-size: 16px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; margin-bottom: 15px; }
+        button { width: 100%; background: #3498db; color: white; border: none; padding: 12px; font-size: 16px; border-radius: 4px; cursor: pointer; font-weight: bold; }
+        button:hover { background: #2980b9; }
+        .result-box { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); white-space: pre-wrap; line-height: 1.6; }
+      </style>
+    </head>
+    <body>
+      <h1>📚 自由研究資料ナビ (iPad版)</h1>
+      <p>調べたいテーマ（例：宇宙、昆虫、地球温暖化）を入力してね！</p>
+      <form action="/search" method="post">
+        <input type="text" name="keyword" placeholder="キーワードを入力してください" required>
+        <button type="submit">AI司書に相談する</button>
+      </form>
+    </body>
+    </html>
+  HTML
+end
+
+# ボタンが押された時の処理
+post '/search' do
+  keyword = params[:keyword]
+  
+  # これまで作った検索処理を実行し、ターミナルへの出力を横取りして画面に表示する
+  orig_stdout = $stdout
+  captured_stdout = StringIO.new
+  $stdout = captured_stdout
+  
+  ResearchFinder.search(keyword)
+  
+  $stdout = orig_stdout
+  result_text = captured_stdout.string
+
+  <<-HTML
+    <!DOCTYPE html>
+    <html lang="ja">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>検索結果 - 自由研究資料ナビ</title>
+      <style>
+        body { font-family: sans-serif; max-width: 800px; margin: 40px auto; padding: 20px; background: #f5f7fa; color: #333; }
+        h1 { color: #2c3e50; }
+        .btn-back { display: inline-block; background: #7f8c8d; color: white; text-decoration: none; padding: 10px 15px; border-radius: 4px; margin-bottom: 20px; font-weight: bold; }
+        .result-box { background: white; padding: 25px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); white-space: pre-wrap; line-height: 1.7; font-size: 15px; }
+      </style>
+    </head>
+    <body>
+      <a href="/" class="btn-back">⬅ 戻る</a>
+      <h1>🔍 「#{keyword}」の検索結果</h1>
+      <div class="result-box">#{result_text}</div>
+    </body>
+    </html>
+  HTML
+end
