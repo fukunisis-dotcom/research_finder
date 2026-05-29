@@ -9,3 +9,5 @@ gem "irb"
 gem "rake", "~> 13.0"
 gem 'rexml'
 gem 'sinatra'
+gem 'rackup'
+gem 'puma'
