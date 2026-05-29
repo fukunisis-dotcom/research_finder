@@ -21,33 +21,6 @@ module ResearchFinder
     puts "          "
     puts "          <path d='M70,40 Q100,10 130,40 Z' stroke='#ecc94b' stroke-width='3' fill='rgba(236,201,75,0.1)'/>"
     puts "          <path d='M100,10 L100,40' stroke='#ecc94b'/>"
-    puts "          <path d='M115,1
-
-exit
-cat << 'EOF' > lib/research_finder.rb
-require "net/http"
-require "uri"
-require "json"
-require "rexml/document"
-
-module ResearchFinder
-  GEMINI_API_KEY = ENV['GEMINI_API_KEY']
-
-  def self.search(keyword)
-    # 🌟 全体を「みっちー」のネオン世界観（ダークモード）にリニューアル
-    puts "<div style='font-family: \"Helvetica Neue\", Arial, \"Hiragino Kaku Gothic ProN\", sans-serif; background-color: #121214; color: #e2e8f0; max-width: 900px; margin: 0 auto; padding: 25px; border: 2px solid #ff007f; border-radius: 12px; box-shadow: 0 0 20px rgba(255, 0, 127, 0.2);'>"
-    
-    # レイアウトを左右2カラムに分割（左：みっちー、右：検索結果）
-    puts "  <div style='display: flex; flex-direction: row; gap: 30px; align-items: flex-start; flex-wrap: wrap;'>"
-    
-    # ── 左カラム：みっちー常駐エリア ──
-    puts "    <div style='flex: 1; min-width: 260px; text-align: center; background: #1a1a1e; padding: 20px; border-radius: 8px; border: 1px solid #333;'>"
-    # あなたの「みっちー」画像をベースにしたSVG風ネオンアバター（インライン表示）
-    puts "      <svg width='200' height='220' viewBox='0 0 200 220' style='filter: drop-shadow(0 0 8px #00ffff);'>"
-    puts "        <g stroke='#00ffff' stroke-width='2' fill='none'>"
-    puts "          "
-    puts "          <path d='M70,40 Q100,10 130,40 Z' stroke='#ecc94b' stroke-width='3' fill='rgba(236,201,75,0.1)'/>"
-    puts "          <path d='M100,10 L100,40' stroke='#ecc94b'/>"
     puts "          <path d='M115,15 Q140,20 135,50' stroke='#48bb78' stroke-width='2'/>"
     puts "          "
     puts "          <path d='M50,80 Q45,140 100,180 Q155,140 150,80 Z' stroke='#9f7aea' stroke-width='4' fill='rgba(159,122,234,0.05)'/>"
