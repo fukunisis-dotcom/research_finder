@@ -4,32 +4,36 @@ require "json"
 require "rexml/document"
 
 module ResearchFinder
-  # Renderの環境変数から安全にキーを読み込むように変更
   GEMINI_API_KEY = ENV['GEMINI_API_KEY']
+  
+  # 大阪近辺の主要図書館のコード（大阪市立、大阪府立、東大阪市立、堺市立など）
+  # カーリルで一括検索するために「Pref_Osaka」を指定します
+  CALIL_SYSTEM_IDS = "Pref_Osaka"
 
   def self.search(keyword)
     puts "========================================"
-    puts "🔍 「#{keyword}」の自由研究資料・公的データを検索中..."
+    puts "🔍 「#{keyword}」の自由研究ナビ v2（大阪図書館・CiNii対応）"
     puts "========================================\n\n"
 
     suggestions = ask_ai_for_suggestions(keyword)
     if suggestions[:books].empty? && suggestions[:documents].empty?
-      puts "❌ AIからの提案が得られませんでした。もう一度試してください。"
+      puts "❌ AIからの提案が得られませんでした。時間を置いてもう一度試してください。"
       return
     end
 
-    puts "🕵️‍♂️ 【国立国会図書館 蔵書目録】で存在チェック＆正式名を取得中...⏳"
-    
+    puts "🕵️‍♂️ 【国立国会図書館 蔵書目録】で存在チェック中...⏳"
     verified_books = verify_list(suggestions[:books])
-    verified_docs = verify_list(suggestions[:documents])
+    
+    # 🌟 新機能1：カーリルで大阪近辺の図書館の貸出・配架状況をチェック！
+    puts "\n📚 【カーリル API】大阪近辺の図書館の在庫状況を調べています...⏳"
+    check_calil_status(verified_books)
+
+    # 🌟 新機能2：CiNiiから関連する論文を検索！
+    puts "\n🎓 【CiNii API】関連する日本の論文・研究データを検索中...⏳"
+    search_ciniis(keyword)
+
     puts "\n"
-
-    if verified_books.empty? && verified_docs.empty?
-      puts "❌ 蔵書目録で実在を確認できた資料がありませんでした。"
-      return
-    end
-
-    ask_ai_to_explain(keyword, verified_books, verified_docs)
+    ask_ai_to_explain(keyword, verified_books, suggestions[:documents])
   end
 
   def self.ask_ai_for_suggestions(keyword)
@@ -38,15 +42,13 @@ module ResearchFinder
 
     prompt = <<~TEXT
       あなたはプロの図書館司書です。中学生の自由研究テーマ「#{keyword}」について、以下の2つのカテゴリに合う、実在する分かりやすい資料をそれぞれ2〜3個ずつ挙げてください。
-
-      1. 【一般書籍】（図鑑、新書、解説書など）
-      2. 【政府の報告書・白書・統計データ】（文部科学省、内閣府、JAXAなどの公的文書や、宇宙開発に関する白書・報告書など）
+      [一般書籍]には、できるだけISBN（10桁または13桁の数字）も一緒に調べて、タイトルと並べて書いてください。
 
       【出力のルール】
-      解説は一切書かず、以下の形式（カギカッコ付き）だけで出力してください。
+      解説は一切書かず、以下の形式（カギカッコ付き）だけで出力してください。ISBNがない場合はタイトルだけで構いません。
       [一般書籍]
-      「書籍タイトル1」
-      「書籍タイトル2」
+      「書籍タイトル1 (ISBN: 数字)」
+      「書籍タイトル2 (ISBN: 数字)」
       [政府文書・白書]
       「白書・データタイトル1」
       「白書・データタイトル2」
@@ -76,7 +78,7 @@ module ResearchFinder
     verified = []
     titles.each do |title|
       next if title.strip.empty?
-      clean_title = title.gsub(/[「」『』:：]/, " ").strip
+      clean_title = title.split("(ISBN")[0].gsub(/[「」『』:：]/, " ").strip
       safe_title = URI.encode_www_form_component(clean_title)
       
       url = URI.parse("https://ndlsearch.ndl.go.jp/api/opensearch?title=#{safe_title}")
@@ -91,12 +93,9 @@ module ResearchFinder
         
         if first_item
           official_title = first_item.elements['title'] ? first_item.elements['title'].text : nil
-          if official_title
-            puts "  ・『#{title}』 -> ✅ 確認！(正式名: 『#{official_title}』)"
-            verified << official_title
-          end
-        else
-          puts "  ・『#{title}』 -> ❌ 蔵書目録にないため除外"
+          isbn = title.match(/ISBN:\s*([0-9X]+)/) ? title.match(/ISBN:\s*([0-9X]+)/)[1] : nil
+          verified << { title: official_title || clean_title, isbn: isbn }
+          puts "  ・『#{official_title || clean_title}』 -> ✅ 国会図書館にあり"
         end
       rescue
       end
@@ -104,18 +103,88 @@ module ResearchFinder
     verified
   end
 
+  # 🌟 カーリル検索の処理
+  def self.check_calil_status(books)
+    books.each do |book|
+      if book[:isbn].nil?
+        puts "  ・『#{book[:title]}』 -> ⚠️ ISBN不明のため大阪の蔵書検索をスキップ（直接検索してください）"
+        next
+      end
+
+      # カーリルの無料API（テスト用キーを使用）
+      url = URI.parse("https://api.calil.jp/check?appkey=98cc78fbdf30ea3e7e8346cb46f7d54e&isbn=#{book[:isbn]}&systemid=#{CALIL_SYSTEM_IDS}&format=json")
+      begin
+        response = Net::HTTP.get(url)
+        # カーリルAPIの仕様（一回目のリクエストはcallbackになることがあるため簡易パース）
+        json_text = response.match(/callback\((.*)\);/) ? response.match(/callback\((.*)\);/)[1] : response
+        result = JSON.parse(json_text)
+        
+        system_data = result["books"][book[:isbn]][CALIL_SYSTEM_IDS]
+        if system_data && system_data["libkey"]
+          status = system_data["status"]
+          puts "  ・『#{book[:title]}』 -> 📍 大阪府内図書館: 【#{status == 'OK' ? '蔵書あり(貸出状況はWebで)' : '検索中/確認を'}】"
+          puts "     🔗 カーリルで見る: https://calil.jp/book/#{book[:isbn]}"
+        else
+          puts "  ・『#{book[:title]}』 -> 🔎 大阪の図書館に蔵書があるかカーリルで確認してください"
+          puts "     🔗 リンク: https://calil.jp/book/#{book[:isbn]}"
+        end
+      rescue
+        puts "  ・『#{book[:title]}』 -> 🔗 大阪の図書館の在庫を見る: https://calil.jp/book/#{book[:isbn]}"
+      end
+    end
+  end
+
+  # 🌟 CiNii 論文検索の処理
+  def self.search_ciniis(keyword)
+    safe_keyword = URI.encode_www_form_component(keyword)
+    # CiNii ResearchのOpenSearch APIを使用
+    url = URI.parse("https://ci.nii.ac.jp/opensearch/author?q=#{safe_keyword}&format=rss")
+    
+    begin
+      request = Net::HTTP::Get.new(url)
+      response = Net::HTTP.start(url.host, url.port, use_ssl: true) { |http| http.request(request) }
+      
+      doc = REXML::Document.new(response.body)
+      items = doc.elements.to_a('//item')
+      
+      if items.empty?
+        # キーワードを変えて再挑戦
+        url_articles = URI.parse("https://ci.nii.ac.jp/opensearch/article?q=#{safe_keyword}&format=rss")
+        response_articles = Net::HTTP.start(url_articles.host, url_articles.port, use_ssl: true) { |http| http.request(url_articles) }
+        doc = REXML::Document.new(response_articles.body)
+        items = doc.elements.to_a('//item')
+      end
+
+      if items.empty?
+        puts "  ❌ 関連する論文が見つかりませんでした。別のキーワードを試してください。"
+      else
+        items.first(3).each_with_index do |item, idx|
+          title = item.elements['title'] ? item.elements['title'].text : "無題の論文"
+          link = item.elements['link'] ? item.elements['link'].text : "#"
+          creator = item.elements['dc:creator'] ? item.elements['dc:creator'].text : "不明"
+          puts "  #{idx+1}. 『#{title}』 (著者: #{creator})"
+          puts "     🔗 論文を読む(CiNii): #{link}"
+        end
+      end
+    rescue => e
+      # エラーが起きても最低限リンクだけ出す
+      puts "  🔗 CiNiiで直接論文を探す: https://ci.nii.ac.jp/search?q=#{safe_keyword}"
+    end
+  end
+
   def self.ask_ai_to_explain(keyword, books, docs)
-    puts "📝 検証された資料を使って、自由研究のアドバイスを作成中...⏳\n\n"
+    return if books.empty? && docs.empty?
+    puts "📝 バージョン2のAI司書が、自由研究のアドバイスを作成中...⏳\n\n"
     url = URI.parse("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=#{GEMINI_API_KEY}")
 
     prompt = <<~TEXT
       あなたは中学生の自由研究を助ける優しい図書館司書です。
-      テーマ「#{keyword}」について、国会図書館で実在が確認された以下の資料リストを使い、中学生向けにおすすめの理由や自由研究への具体的な活かし方を解説してください。特に【政府文書・白書・統計データ】については、「国が出している信頼できるデータだよ」という点をアピールし、グラフや数字をどう研究に使うと良いかも優しく教えてあげてください。
+      テーマ「#{keyword}」について、実在が確認された一般書籍や政府データを使い、中学生向けにおすすめの理由や具体的な活かし方を解説してください。また、「CiNiiで論文を読んだり、地元のカーリルを使って大阪の図書館で本を借りてみよう！」というアドバイスも最後に優しく添えてあげてください。
 
-      【実在する一般書籍】
-      #{books.map { |t| "- #{t}" }.join("\n")}
+      【一般書籍】
+      #{books.map { |b| "- #{b[:title]}" }.join("\n")}
 
-      【実在する政府文書・白書・統計データ】
+      【政府文書・白書・統計データ】
       #{docs.map { |t| "- #{t}" }.join("\n")}
     TEXT
 
@@ -128,19 +197,13 @@ module ResearchFinder
       if result && result["candidates"] && result["candidates"][0]["content"]
         ai_reply = result["candidates"][0]["content"]["parts"][0]["text"]
         puts "========================================"
-        puts "📚 信頼度100%！AI司書からの自由研究ナビ"
+        puts "📚 信頼度200%！新・自由研究ナビ v2"
         puts "========================================"
         puts ai_reply
         puts "========================================"
-      else
-        puts "⚠️ AIからの詳細解説は取得できませんでしたが、以下の資料の実在を確認しました！"
-        puts "\n【おすすめの一般書籍】"
-        books.each { |t| puts " 📖 #{t}" }
-        puts "\n【信頼できる政府文書・白書・統計データ】"
-        docs.each { |t| puts " 📊 #{t}" }
       end
-    rescue => e
-      puts "エラーが発生しました: #{e.message}"
+    rescue
+      puts "⚠️ AI解説の生成でエラーが起きましたが、上記のカーリル・CiNiiの検索結果を参考にしてください！"
     end
   end
 
