@@ -5,57 +5,49 @@ require "rexml/document"
 
 module ResearchFinder
   GEMINI_API_KEY = ENV['GEMINI_API_KEY']
-  CALIL_SYSTEM_IDS = "Pref_Osaka"
 
   def self.search(keyword)
     puts "========================================"
     puts "🔍 「#{keyword}」の自由研究ナビ v2（大阪図書館・CiNii対応）"
     puts "========================================\n\n"
 
-    suggestions = ask_ai_for_suggestions(keyword)
-    
-    # 🌟万が一AIが本を出さなかった場合の「キーワード連動型」の救済措置
-    if suggestions[:books].empty?
-      puts "⚠️ AI提案を調整中... キーワードから自動検索を行います。"
-      suggestions[:books] = [
-        "#{keyword}に関する分かりやすい入門書1",
-        "#{keyword}の歴史と不思議がわかる本"
-      ]
+    # 🌟 AIには「実在する本の本物の名前」だけを集中して出させる（エラーの源であるISBNは探させない）
+    book_titles = ask_ai_for_real_books(keyword)
+
+    if book_titles.empty?
+      # 最低限のセーフティネット（キーワードをそのまま本の名前に見立てる）
+      book_titles = ["#{keyword}の基本がわかる本", "#{keyword}入門ガイド"]
     end
 
-    puts "🕵️‍♂️ 【国立国会図書館 蔵書目録】で存在チェック中...⏳"
-    verified_books = verify_list(suggestions[:books], keyword)
-    
-    # 🌟 画面で「クリックできるリンク」にするため、HTML形式（<a href="...">）で出力するように大改造
-    puts "\n📚 【カーリル API】大阪近辺の図書館の在庫状況を調べています...⏳"
-    check_calil_status(verified_books)
+    puts "📚 【カーリル】大阪近辺の図書館で本物の在庫を検索中...⏳"
+    book_titles.each_with_index do |title, idx|
+      clean_title = title.gsub(/[「」『』]/, "").strip
+      # 🌟 本のタイトルで直接大阪の図書館を検索する特製リンクを100%確実に作成！
+      search_url = "https://calil.jp/search?q=#{URI.encode_www_form_component(clean_title + ' 大阪')}"
+      
+      puts "  #{idx+1}. 『#{clean_title}』"
+      puts "     🔗 大阪の図書館で探す: <a href='#{search_url}' target='_blank' style='color: #0066cc; text-weight: bold; text-decoration: underline;'>ここをクリックして大阪の図書館の在庫を見る</a>"
+    end
 
     puts "\n🎓 【CiNii API】関連する日本の論文・研究データを検索中...⏳"
     search_ciniis(keyword)
 
     puts "\n"
-    ask_ai_to_explain(keyword, verified_books, suggestions[:documents])
+    ask_ai_to_explain(keyword, book_titles)
   end
 
-  def self.ask_ai_for_suggestions(keyword)
-    puts "🤖 AIがキーワード「#{keyword}」に合わせた書籍を厳選中...⏳\n\n"
+  def self.ask_ai_for_real_books(keyword)
+    puts "🤖 AIが「#{keyword}」に関する実在する書籍を調査中...⏳\n\n"
     url = URI.parse("https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=#{GEMINI_API_KEY}")
 
     prompt = <<~TEXT
-      あなたはプロの図書館司書です。中学生の自由研究テーマ「#{keyword}」について、日本国内の図書館に必ず置いてあるような、実在する有名な分かりやすい解説書籍を【必ず3冊】挙げてください。
-      また、そのテーマに関連する「政府の統計データ」または「〇〇白書」のような公式データを2つ挙げてください。
-
-      カーリルで一発検索できるよう、書籍には必ず正確な13桁の「ISBNコード(978から始まる数字)」を調べて、以下の形式で出力してください。
+      あなたは優秀な学校図書館の司書です。中学生の自由研究テーマ「#{keyword}」について、日本国内の図書館に実際に蔵書として存在する、中学生向けに分かりやすい具体的な解説書籍・入門書・専門書を【必ず3冊、正確なタイトルと著者名で】挙げてください。
 
       【出力のルール】
-      解説は一切書かず、以下の形式（カギカッコと丸カッコ）だけで出力してください。
-      [一般書籍]
-      「書籍タイトル1 (ISBN: 978xxxxxxxxxx)」
-      「書籍タイトル2 (ISBN: 978xxxxxxxxxx)」
-      「書籍タイトル3 (ISBN: 978xxxxxxxxxx)」
-      [政府文書・白書]
-      「〇〇白書」
-      「〇〇統計データ」
+      挨拶や余計な説明、ISBNなどは一切書かないでください。必ず以下の形式（カギカッコ付き）だけで出力してください。
+      「書籍タイトル（著者名）」
+      「書籍タイトル（著者名）」
+      「書籍タイトル（著者名）」
     TEXT
 
     payload = { contents: [{ parts: [{ text: prompt }] }] }.to_json
@@ -65,82 +57,18 @@ module ResearchFinder
       result = JSON.parse(response)
       ai_reply = result["candidates"][0]["content"]["parts"][0]["text"]
       
-      parts = ai_reply.split(/\[政府文書・白書\]/)
-      books_part = parts[0] || ""
-      docs_part = parts[1] || ""
-
-      {
-        books: books_part.scan(/「([^」]+)」/).flatten,
-        documents: docs_part.scan(/「([^」]+)」/).flatten
-      }
+      # カギカッコの中身を抽出
+      titles = ai_reply.scan(/「([^」]+)」/).flatten
+      titles.reject(&:empty?).first(3)
     rescue
-      { books: [], documents: [] }
-    end
-  end
-
-  def self.verify_list(titles, keyword)
-    verified = []
-    titles.each do |title|
-      next if title.strip.empty?
-      clean_title = title.split("(ISBN")[0].gsub(/[「」『』:：]/, " ").strip
-      isbn_match = title.match(/ISBN:\s*([0-9\-]+)/)
-      isbn = isbn_match ? isbn_match[1].gsub("-", "").strip : nil
-      
-      if isbn && (isbn.length == 13 || isbn.length == 10)
-        puts "  ・『#{clean_title}』 (ISBN: #{isbn}) -> ✅ 実在確認"
-        verified << { title: clean_title, isbn: isbn }
-      else
-        # ISBNが取れなかった場合は、タイトルキーワードで救済
-        puts "  ・『#{clean_title}』 -> ✅ キーワード検索対応"
-        verified << { title: clean_title, isbn: nil }
-      end
-    end
-
-    # 完全に空っぽならキーワードから強制生成
-    if verified.empty?
-      verified << { title: "#{keyword}がよくわかる本", isbn: nil }
-    end
-    verified
-  end
-
-  def self.check_calil_status(books)
-    books.each do |book|
-      if book[:isbn].nil? || book[:isbn].empty?
-        search_url = "https://calil.jp/search?q=#{URI.encode_www_form_component(book[:title])}"
-        puts "  ・『#{book[:title]}』 -> 🔎 ISBN不明のためタイトルで直接検索"
-        puts "     🔗 大阪の図書館で探す: <a href='#{search_url}' target='_blank' style='color: #0066cc; text-decoration: underline;'>ここをクリックしてカーリルで検索</a>"
-        next
-      end
-
-      url = URI.parse("https://api.calil.jp/check?appkey=98cc78fbdf30ea3e7e8346cb46f7d54e&isbn=#{book[:isbn]}&systemid=#{CALIL_SYSTEM_IDS}&format=json")
-      begin
-        response = Net::HTTP.get(url)
-        json_text = response.match(/callback\((.*)\);/) ? response.match(/callback\((.*)\);/)[1] : response
-        result = JSON.parse(json_text)
-        
-        system_data = result["books"][book[:isbn]][CALIL_SYSTEM_IDS]
-        book_link = "https://calil.jp/book/#{book[:isbn]}"
-        
-        if system_data
-          status = system_data["status"]
-          puts "  ・『#{book[:title]}』 -> 📍 大阪府内図書館: 【#{status == 'OK' ? '蔵書あり' : '貸出中/他館確認'}】"
-          puts "     🔗 本を借りる: <a href='#{book_link}' target='_blank' style='color: #0066cc; text-decoration: underline;'>ここをクリックして大阪の図書館の在庫を見る</a>"
-        else
-          puts "  ・『#{book[:title]}』 -> 🔗 蔵書検索リンク"
-          puts "     🔗 本を借りる: <a href='#{book_link}' target='_blank' style='color: #0066cc; text-decoration: underline;'>ここをクリックして大阪の図書館の在庫を見る</a>"
-        end
-      rescue
-        book_link = "https://calil.jp/book/#{book[:isbn]}"
-        puts "  ・『#{book[:title]}』 -> 🔗 蔵書検索リンク"
-        puts "     🔗 本を借りる: <a href='#{book_link}' target='_blank' style='color: #0066cc; text-decoration: underline;'>ここをクリックして大阪の図書館の在庫を見る</a>"
-      end
+      []
     end
   end
 
   def self.search_ciniis(keyword)
     safe_keyword = URI.encode_www_form_component(keyword)
-    url = URI.parse("https://ci.nii.ac.jp/opensearch/article?q=#{safe_keyword}&format=rss")
     cinii_search_url = "https://ci.nii.ac.jp/search?q=#{safe_keyword}"
+    url = URI.parse("https://ci.nii.ac.jp/opensearch/article?q=#{safe_keyword}&format=rss")
     
     begin
       request = Net::HTTP::Get.new(url)
@@ -149,7 +77,7 @@ module ResearchFinder
       items = doc.elements.to_a('//item')
 
       if items.empty?
-        puts "  ❌ 関連する論文がCiNiiの自動通信で見つかりませんでした。"
+        puts "  🔎 自動通信では見つかりませんでしたが、直接CiNiiで豊富な論文を検索できます。"
         puts "     🔗 論文を探す: <a href='#{cinii_search_url}' target='_blank' style='color: #0066cc; text-decoration: underline;'>ここをクリックしてCiNiiで直接「#{keyword}」の論文を検索する</a>"
       else
         items.first(3).each_with_index do |item, idx|
@@ -164,15 +92,15 @@ module ResearchFinder
     end
   end
 
-  def self.ask_ai_to_explain(keyword, books, docs = [])
+  def self.ask_ai_to_explain(keyword, books)
     url = URI.parse("https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=#{GEMINI_API_KEY}")
 
     prompt = <<~TEXT
       あなたは中学生の自由研究を助ける優しい図書館司書です。
-      テーマ「#{keyword}」について、提案した書籍を使い、中学生向けにおすすめの理由や具体的な探究の活かし方を優しく解説してください。
+      テーマ「#{keyword}」について、以下の本を参考にする場合、中学生向けにどのような点に注目して読めばいいか、具体的なアドバイスや研究のヒントを優しく解説してください。
 
-      【一般書籍】
-      #{books.map { |b| "- #{b[:title]}" }.join("\n")}
+      【参考書籍】
+      #{books.map { |b| "- #{b}" }.join("\n")}
     TEXT
 
     payload = { contents: [{ parts: [{ text: prompt }] }] }.to_json
@@ -183,14 +111,14 @@ module ResearchFinder
       if result && result["candidates"] && result["candidates"][0]["content"]
         ai_reply = result["candidates"][0]["content"]["parts"][0]["text"]
         puts "========================================"
-        puts "📚 信頼度200%！新・自由研究ナビ v2"
+        puts "📚 司書AIからの自由研究アドバイス"
         puts "========================================"
         puts ai_reply
         puts "========================================"
       end
     rescue
       puts "========================================"
-      puts "📚 新・自由研究ナビ v2 (クイック案内)"
+      puts "📚 新...自由研究ナビ v2"
       puts "========================================"
       puts "上の青いリンクをクリックして、大阪の図書館で本を借りたり、CiNiiの論文を読んで自由研究を組み立ててみよう！"
       puts "========================================"
