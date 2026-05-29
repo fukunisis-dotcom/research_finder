@@ -4,21 +4,20 @@ require "json"
 require "rexml/document"
 
 module ResearchFinder
-  GEMINI_API_KEY = "AIzaSyA6-SRF-xNP0C7cmL0kbAj0RKXJe9oeELo"
+  # Renderの環境変数から安全にキーを読み込むように変更
+  GEMINI_API_KEY = ENV['GEMINI_API_KEY']
 
   def self.search(keyword)
     puts "========================================"
     puts "🔍 「#{keyword}」の自由研究資料・公的データを検索中..."
     puts "========================================\n\n"
 
-    # ステップ1: AIから「一般書籍」と「政府文書・白書」のアイデアをもらう
     suggestions = ask_ai_for_suggestions(keyword)
     if suggestions[:books].empty? && suggestions[:documents].empty?
       puts "❌ AIからの提案が得られませんでした。もう一度試してください。"
       return
     end
 
-    # ステップ2: 国会図書館で実在検証
     puts "🕵️‍♂️ 【国立国会図書館 蔵書目録】で存在チェック＆正式名を取得中...⏳"
     
     verified_books = verify_list(suggestions[:books])
@@ -30,11 +29,9 @@ module ResearchFinder
       return
     end
 
-    # ステップ3: 検証済みの確実なデータだけで、生徒向けのアドバイスを生成
     ask_ai_to_explain(keyword, verified_books, verified_docs)
   end
 
-  # AIに書籍と白書・公的資料を分けて挙げてもらう処理
   def self.ask_ai_for_suggestions(keyword)
     puts "🤖 AIがWeb上の知識から資料をリストアップ中...⏳\n\n"
     url = URI.parse("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=#{GEMINI_API_KEY}")
@@ -62,7 +59,6 @@ module ResearchFinder
       result = JSON.parse(response)
       ai_reply = result["candidates"][0]["content"]["parts"][0]["text"]
       
-      # [一般書籍] と [政府文書・白書] の部分を切り分ける
       parts = ai_reply.split(/\[政府文書・白書\]/)
       books_part = parts[0] || ""
       docs_part = parts[1] || ""
@@ -76,7 +72,6 @@ module ResearchFinder
     end
   end
 
-  # 国会図書館の蔵書目録で1件ずつ検証する共通処理
   def self.verify_list(titles)
     verified = []
     titles.each do |title|
@@ -84,7 +79,6 @@ module ResearchFinder
       clean_title = title.gsub(/[「」『』:：]/, " ").strip
       safe_title = URI.encode_www_form_component(clean_title)
       
-      # 官庁資料（白書等）も含まれるため、全体から検索できるように dpid は外します
       url = URI.parse("https://ndlsearch.ndl.go.jp/api/opensearch?title=#{safe_title}")
       
       begin
@@ -105,13 +99,11 @@ module ResearchFinder
           puts "  ・『#{title}』 -> ❌ 蔵書目録にないため除外"
         end
       rescue
-        # 通信エラー時はスキップ
       end
     end
     verified
   end
 
-  # 解説を生成する処理
   def self.ask_ai_to_explain(keyword, books, docs)
     puts "📝 検証された資料を使って、自由研究のアドバイスを作成中...⏳\n\n"
     url = URI.parse("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=#{GEMINI_API_KEY}")
